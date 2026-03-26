@@ -31,18 +31,20 @@ class PDFReunion(FPDF):
 
     def dibujar_bloque_firmas(self, lista_firmas, fecha_texto):
         self.ln(10)
-        # Lugar y fecha formateada
+        # Lugar y fecha formateada: En Hoyos, a X de mes de año
         self.set_font('helvetica', 'I', 10)
         self.cell(0, 10, f"En Hoyos, a {fecha_texto}", 0, 1, 'L')
         self.ln(5)
         
-        # Cargos dinámicos
+        # Formato: Fdo. Nombre (Cargo)
+        self.set_font('helvetica', '', 10)
         for cargo, nombre in lista_firmas:
-            self.set_font('helvetica', 'B', 10)
-            self.write(7, f"{cargo}: ")
-            self.set_font('helvetica', '', 10)
-            self.multi_cell(0, 7, f"Fdo. {nombre}".encode('latin-1', 'replace').decode('latin-1'))
-            self.ln(2)
+            # Aseguramos que el nombre lleve el prefijo Fdo. si no lo tiene
+            fdo_nombre = f"Fdo. {nombre}" if not str(nombre).lower().startswith("fdo") else nombre
+            texto_firma = f"{fdo_nombre} ({cargo})"
+            
+            self.multi_cell(0, 7, texto_firma.encode('latin-1', 'replace').decode('latin-1'))
+            self.ln(1)
 
 def formatear_fecha_espanol(fecha_obj):
     try:
@@ -52,10 +54,7 @@ def formatear_fecha_espanol(fecha_obj):
             "enero", "febrero", "marzo", "abril", "mayo", "junio",
             "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
         ]
-        dia = fecha_obj.day
-        mes = meses[fecha_obj.month - 1]
-        anio = fecha_obj.year
-        return f"{dia} de {mes} de {anio}"
+        return f"{fecha_obj.day} de {meses[fecha_obj.month - 1]} de {fecha_obj.year}"
     except:
         return "--- de --- de ---"
 
@@ -75,13 +74,12 @@ def generar_pdf_reunion(fila_rpts, lista_firmas):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
-    # Formatear la fecha de la reunión (columna E -> índice 4)
-    fecha_formateada = formatear_fecha_espanol(fila_rpts.iloc[4])
+    fecha_com = formatear_fecha_espanol(fila_rpts.iloc[4])
     
     pdf.seccion("DATOS DE LA REUNIÓN")
     pdf.campo("ID", fila_rpts['ID_GENERADA']) 
     pdf.campo("LA REUNIÓN SE PRODUCE A PETICIÓN DE", fila_rpts.iloc[3])
-    pdf.campo("FECHA Y HORA DE LA COMUNICACIÓN", f"{fecha_formateada} a las {fila_rpts.iloc[5]}")
+    pdf.campo("FECHA Y HORA DE LA COMUNICACIÓN", f"{fecha_com} a las {fila_rpts.iloc[5]}")
     
     solo_nombre, solo_curso = limpiar_nombre_y_curso(fila_rpts.iloc[7])
     pdf.campo("ALUMN@/O", solo_nombre) 
@@ -94,21 +92,25 @@ def generar_pdf_reunion(fila_rpts, lista_firmas):
     pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila_rpts.iloc[12])
     pdf.campo("TRÁMITE A SEGUIR", fila_rpts.iloc[11])
 
-    # Bloque de firmas con la fecha formateada
-    pdf.dibujar_bloque_firmas(lista_firmas, fecha_formateada)
+    # Bloque de firmas con el nuevo formato solicitado
+    pdf.dibujar_bloque_firmas(lista_firmas, fecha_com)
     return pdf.output()
 
-# --- INTERFAZ ---
+# --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Generador Actas", page_icon="🤝")
-st.title("🤝 Generador de Actas")
+st.title("🤝 Generador de Actas Oficiales")
 
-archivo = st.file_uploader("Sube el Excel con pestañas RPTS e Informe", type=['xlsx'])
+archivo = st.file_uploader("Sube el archivo Excel", type=['xlsx'])
 
 if archivo:
     try:
+        # Pestaña 1 para datos: RPTS
         df_rpts = pd.read_excel(archivo, sheet_name='RPTS')
         
-        # Lógica de ID desde Marca Temporal (Columna C)
+        # Pestaña 2 para firmas: Informe
+        df_inf = pd.read_excel(archivo, sheet_name='Informe', header=None)
+
+        # Re-generar ID para el buscador
         def generar_id(fecha_val):
             try:
                 if isinstance(fecha_val, str): fecha_val = pd.to_datetime(fecha_val)
@@ -121,26 +123,33 @@ if archivo:
         df_rpts['ETIQUETA'] = df_rpts['ID_GENERADA'].astype(str) + " - " + df_rpts['NOMBRE_LIMPIO']
         
         opciones = ["Selecciona un acta..."] + sorted(df_rpts[df_rpts['ID_GENERADA'] != "ERR"]['ETIQUETA'].tolist())
-        seleccion = st.selectbox("Busca al alumno:", opciones)
+        seleccion = st.selectbox("Selecciona la reunión:", opciones)
 
         if seleccion != "Selecciona un acta...":
             id_buscada = seleccion.split(" - ")[0]
             fila_sel = df_rpts[df_rpts['ID_GENERADA'] == id_buscada].iloc[0]
             
-            # Leer firmas de pestaña 'Informe' (Fila 49 en Excel es 48 en Python)
-            df_inf = pd.read_excel(archivo, sheet_name='Informe', header=None)
-            firmas = []
-            for i in range(48, 65): # Rango de firmas
+            # Obtener firmas de la pestaña 'Informe' desde fila 49 (índice 48)
+            firmas_finales = []
+            for i in range(48, 65):
                 try:
-                    cargo = df_inf.iloc[i, 0] # Columna A
+                    cargo = df_inf.iloc[i, 0]  # Columna A
                     nombre = df_inf.iloc[i, 2] # Columna C
                     if pd.notna(cargo) and pd.notna(nombre) and str(nombre).strip() not in ["", "nan", "0"]:
-                        firmas.append((str(cargo).strip(": "), str(nombre).strip()))
-                except: continue
+                        # Quitamos dos puntos si existen al final del cargo
+                        cargo_limpio = str(cargo).strip().rstrip(":")
+                        firmas_finales.append((cargo_limpio, str(nombre).strip()))
+                except:
+                    continue
 
-            if st.button("🚀 Crear PDF"):
-                pdf_bytes = generar_pdf_reunion(fila_sel, firmas)
-                st.download_button("⬇️ Descargar Acta", data=bytes(pdf_bytes), file_name=f"Acta_{id_buscada}.pdf")
+            if st.button("🚀 Crear y Descargar PDF"):
+                pdf_bytes = generar_pdf_reunion(fila_sel, firmas_finales)
+                st.download_button(
+                    label="⬇️ Descargar Acta PDF",
+                    data=bytes(pdf_bytes),
+                    file_name=f"Acta_{id_buscada}.pdf",
+                    mime="application/pdf"
+                )
 
     except Exception as e:
-        st.error(f"⚠️ Revisa las pestañas: {e}")
+        st.error(f"⚠️ Error al procesar: {e}")
