@@ -50,7 +50,6 @@ class PDFReunion(FPDF):
 def limpiar_nombre_y_curso(texto):
     if pd.isna(texto): return "---", "---"
     t = str(texto)
-    # Buscamos dónde empieza el curso (por número como 1º, 2º... o por la palabra Diver)
     match = re.search(r'(\d|Diver)', t, re.IGNORECASE)
     if match:
         indice = match.start()
@@ -65,23 +64,22 @@ def generar_pdf_reunion(fila, nombre_jefatura):
     pdf.add_page()
     
     pdf.seccion("DATOS DE LA REUNIÓN")
-    id_val = fila['ID_REDONDEADA']
+    id_val = fila['ID_EXTRAIDA']
     
-    pdf.campo("ID", f"{id_val}. La reunión se produce a petición de: {fila.iloc[3]}") # D
-    pdf.campo("Fecha y hora", f"{fila.iloc[4]} a las {fila.iloc[5]}") # E y F
+    pdf.campo("ID", f"{id_val}. La reunión se produce a petición de: {fila.iloc[3]}") 
+    pdf.campo("Fecha y hora", f"{fila.iloc[4]} a las {fila.iloc[5]}") 
     
-    # Aplicamos la limpieza inteligente de la columna H (7)
     solo_nombre, solo_curso = limpiar_nombre_y_curso(fila.iloc[7])
     
     pdf.campo("ALUMN@/O", solo_nombre) 
     pdf.campo("CURSO", solo_curso)
-    pdf.campo("FAMILIAR/ES PRESENTES", fila.iloc[9]) # J
-    pdf.campo("OTROS PRESENTES", fila.iloc[8]) # I
+    pdf.campo("FAMILIAR/ES PRESENTES", fila.iloc[9]) 
+    pdf.campo("OTROS PRESENTES", fila.iloc[8]) 
     
     pdf.ln(2); pdf.seccion("DESARROLLO DE LA REUNIÓN")
-    pdf.campo("ASUNTO A TRATAR", fila.iloc[10], 'B') # K
-    pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila.iloc[12]) # M
-    pdf.campo("TRÁMITE A SEGUIR", fila.iloc[11]) # L
+    pdf.campo("ASUNTO A TRATAR", fila.iloc[10], 'B') 
+    pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila.iloc[12]) 
+    pdf.campo("TRÁMITE A SEGUIR", fila.iloc[11]) 
 
     pdf.dibujar_firmas_paralelo("Docente responsable", nombre_jefatura)
     return pdf.output()
@@ -96,26 +94,33 @@ if archivo:
     try:
         df = pd.read_excel(archivo, sheet_name='RPTS')
         
-        def extraer_id(valor):
-            try:
-                v = round(float(valor), 4)
-                return str(f"{v:.4f}").split('.')[1]
-            except: return "0000"
+        # LÓGICA DE ID: imita =EXTRAE(B2;HALLAR(",";B2)+1;4)
+        def obtener_id_desde_B(valor):
+            t = str(valor)
+            if "," in t:
+                try:
+                    # Buscamos la posición de la coma, sumamos 1 para saltarla y tomamos 4 caracteres
+                    pos_coma = t.find(",")
+                    return t[pos_coma + 1 : pos_coma + 5].strip()
+                except: return "0000"
+            return "0000"
 
-        df['ID_REDONDEADA'] = df.iloc[:, 0].apply(extraer_id)
+        # Columna B es índice 1
+        df['ID_EXTRAIDA'] = df.iloc[:, 1].apply(obtener_id_desde_B)
         
-        # Generar nombres limpios para el desplegable
+        # Limpieza de nombre en columna H (índice 7)
         df['NOMBRE_LIMPIO'] = df.iloc[:, 7].apply(lambda x: limpiar_nombre_y_curso(x)[0])
-        df['ETIQUETA'] = df['ID_REDONDEADA'].astype(str) + " - " + df['NOMBRE_LIMPIO']
+        df['ETIQUETA'] = df['ID_EXTRAIDA'].astype(str) + " - " + df['NOMBRE_LIMPIO']
         
-        st.success(f"✅ Cargados {len(df)} registros correctamente.")
+        st.success(f"✅ Cargados {len(df)} registros. IDs extraídas de la columna B.")
 
         opciones = ["Selecciona un alumno..."] + sorted(df['ETIQUETA'].dropna().tolist())
         seleccion = st.selectbox("Busca por ID o Nombre:", opciones)
 
         if seleccion != "Selecciona un alumno...":
             id_buscada = seleccion.split(" - ")[0]
-            fila_sel = df[df['ID_REDONDEADA'] == id_buscada].iloc[0]
+            # Usamos la ID extraída para filtrar
+            fila_sel = df[df['ID_EXTRAIDA'] == id_buscada].iloc[0]
             
             try:
                 df_p = pd.read_excel(archivo, sheet_name='PARTE', header=None)
