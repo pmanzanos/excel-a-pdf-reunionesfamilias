@@ -31,7 +31,7 @@ class PDFReunion(FPDF):
     def dibujar_firmas_paralelo(self, docente, jefe):
         self.ln(10)
         y_pos = self.get_y()
-        # Casillas marcadas
+        # Casillas marcadas con X
         for x in [10, 105]:
             self.rect(x, y_pos, 4, 4)
             self.set_font('helvetica', 'B', 8)
@@ -59,49 +59,48 @@ def generar_pdf_reunion(fila, nombre_jefatura):
     # DATOS GENERALES
     pdf.seccion("DATOS DE LA REUNIÓN")
     id_val = fila['ID_REDONDEADA']
-    peticion = fila.iloc[3] # Columna D
+    peticion = fila.iloc[3] # Columna D (Índice 3)
     pdf.campo("ID", f"{id_val}. La reunión se produce a petición de: {peticion}")
     
-    fecha_hora = f"{fila.iloc[4]} a las {fila.iloc[5]}" # E y F
+    fecha_hora = f"{fila.iloc[4]} a las {fila.iloc[5]}" # E (4) y F (5)
     pdf.campo("Fecha y hora de la comunicación", fecha_hora)
-    pdf.campo("ALUMN@/O Y CURSO", fila.iloc[7]) # Columna H
-    pdf.campo("FAMILIAR/ES PRESENTES", fila.iloc[9]) # Columna J
-    pdf.campo("OTROS PRESENTES", fila.iloc[8]) # Columna I
+    pdf.campo("ALUMN@/O Y CURSO", fila.iloc[7]) # Columna H (7)
+    pdf.campo("FAMILIAR/ES PRESENTES", fila.iloc[9]) # Columna J (9)
+    pdf.campo("OTROS PRESENTES", fila.iloc[8]) # Columna I (8)
     
     # CONTENIDO
     pdf.ln(2); pdf.seccion("DESARROLLO DE LA REUNIÓN")
-    pdf.campo("ASUNTO A TRATAR", fila.iloc[10], 'B') # Columna K
-    pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila.iloc[12]) # Columna M
-    pdf.campo("TRÁMITE A SEGUIR", fila.iloc[11]) # Columna L
+    pdf.campo("ASUNTO A TRATAR", fila.iloc[10], 'B') # Columna K (10)
+    pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila.iloc[12]) # Columna M (12)
+    pdf.campo("TRÁMITE A SEGUIR", fila.iloc[11]) # Columna L (11)
 
-    # FIRMAS
-    # Buscamos el docente en la hoja RPTS o ponemos genérico
     pdf.dibujar_firmas_paralelo("Docente responsable", nombre_jefatura)
     
     return pdf.output()
 
 # --- INTERFAZ ---
 st.set_page_config(page_title="Generador Actas", page_icon="🤝")
-st.title("🤝 Actas de Reunión con Familias")
+st.title("🤝 Actas de Reunión (Pestaña RPTS)")
 
 archivo = st.file_uploader("Sube el Excel de Respuestas", type=['xlsx'])
 
 if archivo:
     try:
-        df = pd.read_excel(archivo, sheet_name='Informe')
+        # CAMBIO CLAVE: Ahora leemos de 'RPTS'
+        df = pd.read_excel(archivo, sheet_name='RPTS')
         
-        # Función para ID basada en Columna C (índice 2)
         def extraer_id(valor):
             try:
                 v = round(float(valor), 4)
                 return str(f"{v:.4f}").split('.')[1]
             except: return "0000"
 
+        # ID basada en Columna C (índice 2)
         df['ID_REDONDEADA'] = df.iloc[:, 2].apply(extraer_id)
-        # Etiqueta con ID + Nombre/Curso (Columna H -> índice 7)
+        # Etiqueta basada en Columna H (índice 7)
         df['ETIQUETA'] = df['ID_REDONDEADA'].astype(str) + " - " + df.iloc[:, 7].astype(str)
         
-        st.success(f"✅ Cargados {len(df)} registros de la hoja 'Informe'.")
+        st.success(f"✅ Cargados {len(df)} registros de la hoja 'RPTS'.")
 
         opciones = ["Selecciona un alumno..."] + sorted(df['ETIQUETA'].dropna().tolist())
         seleccion = st.selectbox("Busca por ID o Nombre:", opciones)
@@ -121,6 +120,6 @@ if archivo:
                 st.download_button(label="⬇️ Descargar Acta", data=bytes(pdf_bytes), file_name=f"Acta_{id_buscada}.pdf", mime="application/pdf")
 
     except Exception as e:
-        st.error(f"⚠️ Error: {e}. Revisa que la pestaña se llame 'Informe'.")
+        st.error(f"⚠️ Error: {e}. Revisa que la pestaña se llame 'RPTS'.")
 else:
     st.info("👋 Sube el archivo para comenzar.")
