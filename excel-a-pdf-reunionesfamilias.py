@@ -84,7 +84,7 @@ def generar_pdf_reunion(datos_fila, nombre_jefatura):
     # Campo 2 modificado: Fecha y hora
     pdf.campo("Fecha y hora de la comunicación", datos_fila.get('FECHA DEL INCIDENTE', '---'))
     
-    # Otros datos que suelen ser útiles mantener
+    # Datos de identificación
     pdf.campo("ALUMN@/O", datos_fila.get('ALUMNO OBJETO DEL PARTE', '---'))
     pdf.campo("CURSO / GRUPO / TUTOR", datos_fila.get('CURSO / GRUPO / TUTOR', '---'))
     
@@ -105,4 +105,43 @@ archivo = st.file_uploader("Sube el archivo Excel", type=['xlsx'])
 if archivo:
     try:
         df = pd.read_excel(archivo, sheet_name='RPTS')
-        df_parte = pd.read_excel(archivo, sheet_name='PAR
+        # Capturamos el nombre de jefatura desde la hoja PARTE
+        df_parte = pd.read_excel(archivo, sheet_name='PARTE', header=None)
+        nombre_jefatura = df_parte.iloc[48, 3] if not pd.isna(df_parte.iloc[48, 3]) else "Jefatura de Estudios"
+
+        def extraer_id_redondeada(valor):
+            try:
+                valor_redondeado = round(float(valor), 4)
+                return str(f"{valor_redondeado:.4f}").split('.')[1]
+            except:
+                return None
+
+        # Procesamos IDs y creamos la etiqueta para el buscador
+        df['ID_REDONDEADA'] = df['NUMERO'].apply(extraer_id_redondeada)
+        df['ETIQUETA'] = df['ID_REDONDEADA'].astype(str) + " - " + df['ALUMNO OBJETO DEL PARTE'].astype(str)
+        
+        st.success("✅ Archivo cargado correctamente.")
+
+        # Desplegable de selección
+        opciones = ["Selecciona un alumno..."] + sorted(df['ETIQUETA'].dropna().tolist())
+        seleccion = st.selectbox("Introduce la ID:", opciones)
+
+        if seleccion != "Selecciona un alumno...":
+            id_real = seleccion.split(" - ")[0]
+            fila = df[df['ID_REDONDEADA'] == id_real].iloc[0]
+            
+            st.info(f"📋 Registro seleccionado: {fila['ALUMNO OBJETO DEL PARTE']}")
+            
+            if st.button("🚀 Generar Informe de Reunión"):
+                pdf_bytes = generar_pdf_reunion(fila, nombre_jefatura)
+                st.download_button(
+                    label="⬇️ Descargar Informe PDF",
+                    data=bytes(pdf_bytes),
+                    file_name=f"Reunion_{id_real}.pdf",
+                    mime="application/pdf"
+                )
+
+    except Exception as e:
+        st.error(f"⚠️ Error al procesar el archivo: {e}")
+else:
+    st.info("👋 Por favor, sube el archivo Excel para empezar.")
