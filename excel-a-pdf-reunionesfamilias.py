@@ -24,29 +24,26 @@ class PDFReunion(FPDF):
         self.set_font('helvetica', 'B', 10)
         self.write(6, f"{etiqueta}: ")
         self.set_font('helvetica', estilo_valor, 10)
-        # Limpieza de valores nulos o errores de Excel
         val_str = str(valor) if pd.notna(valor) and str(valor).strip() not in ["nan", "None", "", "#VALUE!"] else "---"
         self.multi_cell(0, 6, val_str.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(1)
 
-    def dibujar_firmas_paralelo(self, docente, jefe):
+    def dibujar_bloque_firmas(self, lista_firmas, fecha_reunion):
         self.ln(10)
-        y_pos = self.get_y()
-        for x in [10, 105]:
-            self.rect(x, y_pos, 4, 4)
-            self.set_font('helvetica', 'B', 8)
-            self.text(x+1, y_pos + 3.2, "X")
+        # Fecha de cierre
+        fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
+        self.set_font('helvetica', 'I', 10)
+        self.cell(0, 10, f"En Hoyos, a {fecha_reunion}", 0, 1, 'L')
+        self.ln(5)
+        
+        # Dibujar solo cargos con nombre
         self.set_font('helvetica', '', 10)
-        self.set_xy(16, y_pos - 1); self.cell(85, 6, "Conforme del Docente / Ed. Social", 0, 0)
-        self.set_xy(111, y_pos - 1); self.cell(85, 6, "Conforme de la Jefatura de Estudios", 0, 1)
-        self.ln(15)
-        y_nombres = self.get_y()
-        self.set_xy(10, y_nombres); self.set_font('helvetica', 'B', 10)
-        self.cell(90, 5, "V.º B.º El Docente / Ed. Social", 0, 1, 'L')
-        self.set_font('helvetica', 'I', 9); self.cell(90, 5, f"Fdo: {docente}".encode('latin-1', 'replace').decode('latin-1'), 0, 0, 'L')
-        self.set_xy(105, y_nombres); self.set_font('helvetica', 'B', 10)
-        self.cell(90, 5, "V.º B.º Jefatura de Estudios", 0, 1, 'L')
-        self.set_font('helvetica', 'I', 9); self.set_x(105); self.cell(90, 5, f"Fdo: {jefe}".encode('latin-1', 'replace').decode('latin-1'), 0, 0, 'L')
+        for cargo, nombre in lista_firmas:
+            self.set_font('helvetica', 'B', 10)
+            self.write(7, f"{cargo}: ")
+            self.set_font('helvetica', '', 10)
+            self.multi_cell(0, 7, f"Fdo. {nombre}".encode('latin-1', 'replace').decode('latin-1'))
+            self.ln(2)
 
 def limpiar_nombre_y_curso(texto):
     if pd.isna(texto): return "---", "---"
@@ -59,81 +56,89 @@ def limpiar_nombre_y_curso(texto):
         return nombre, curso
     return t, "---"
 
-def generar_pdf_reunion(fila, nombre_jefatura):
+def generar_pdf_reunion(fila_rpts, lista_firmas):
     pdf = PDFReunion()
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
     pdf.seccion("DATOS DE LA REUNIÓN")
+    pdf.campo("ID", fila_rpts['ID_GENERADA']) 
+    pdf.campo("LA REUNIÓN SE PRODUCE A PETICIÓN DE", fila_rpts.iloc[3])
     
-    # SEPARADOS EN LÍNEAS DISTINTAS
-    pdf.campo("ID", fila['ID_GENERADA']) 
-    pdf.campo("LA REUNIÓN SE PRODUCE A PETICIÓN DE", fila.iloc[3]) # Columna D
+    fecha_com = str(fila_rpts.iloc[4]).split(" ")[0] # Solo fecha
+    pdf.campo("FECHA Y HORA DE LA COMUNICACIÓN", f"{fecha_com} a las {fila_rpts.iloc[5]}")
     
-    pdf.campo("FECHA Y HORA DE LA COMUNICACIÓN", f"{fila.iloc[4]} a las {fila.iloc[5]}") # E y F
-    
-    solo_nombre, solo_curso = limpiar_nombre_y_curso(fila.iloc[7]) # Columna H
+    solo_nombre, solo_curso = limpiar_nombre_y_curso(fila_rpts.iloc[7])
     pdf.campo("ALUMN@/O", solo_nombre) 
     pdf.campo("CURSO", solo_curso)
-    
-    pdf.campo("FAMILIAR/ES PRESENTES", fila.iloc[9]) # Columna J
-    pdf.campo("OTROS PRESENTES", fila.iloc[8]) # Columna I
+    pdf.campo("FAMILIAR/ES PRESENTES", fila_rpts.iloc[9])
+    pdf.campo("OTROS PRESENTES", fila_rpts.iloc[8])
     
     pdf.ln(2); pdf.seccion("DESARROLLO DE LA REUNIÓN")
-    pdf.campo("ASUNTO A TRATAR", fila.iloc[10], 'B') # Columna K
-    pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila.iloc[12]) # Columna M
-    pdf.campo("TRÁMITE A SEGUIR", fila.iloc[11]) # Columna L
+    pdf.campo("ASUNTO A TRATAR", fila_rpts.iloc[10], 'B')
+    pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila_rpts.iloc[12])
+    pdf.campo("TRÁMITE A SEGUIR", fila_rpts.iloc[11])
 
-    pdf.dibujar_firmas_paralelo("Docente responsable", nombre_jefatura)
+    # Firmas dinámicas
+    pdf.dibujar_bloque_firmas(lista_firmas, fecha_com)
     return pdf.output()
 
 # --- INTERFAZ STREAMLIT ---
+import datetime
 st.set_page_config(page_title="Generador Actas", page_icon="🤝")
-st.title("🤝 Generador de Actas de Reunión")
+st.title("🤝 Actas de Reunión con Firmas Dinámicas")
 
-archivo = st.file_uploader("Sube el archivo Excel (Pestaña RPTS)", type=['xlsx'])
+archivo = st.file_uploader("Sube el Excel", type=['xlsx'])
 
 if archivo:
     try:
-        df = pd.read_excel(archivo, sheet_name='RPTS')
+        # 1. Leer RPTS para el listado
+        df_rpts = pd.read_excel(archivo, sheet_name='RPTS')
         
-        def generar_id_desde_fecha(fecha_val):
+        def generar_id(fecha_val):
             try:
-                if isinstance(fecha_val, str):
-                    fecha_val = pd.to_datetime(fecha_val)
+                if isinstance(fecha_val, str): fecha_val = pd.to_datetime(fecha_val)
                 excel_date = (fecha_val - pd.Timestamp("1899-12-30")).total_seconds() / 86400.0
-                num_redondeado = round(excel_date, 5)
-                return str(f"{num_redondeado:.5f}").split(".")[1][:4]
-            except:
-                return "ERR"
+                return str(f"{round(excel_date, 5):.5f}").split(".")[1][:4]
+            except: return "ERR"
 
-        df['ID_GENERADA'] = df.iloc[:, 2].apply(generar_id_desde_fecha)
-        df['NOMBRE_LIMPIO'] = df.iloc[:, 7].apply(lambda x: limpiar_nombre_y_curso(x)[0])
-        df['ETIQUETA'] = df['ID_GENERADA'].astype(str) + " - " + df['NOMBRE_LIMPIO']
+        df_rpts['ID_GENERADA'] = df_rpts.iloc[:, 2].apply(generar_id)
+        df_rpts['NOMBRE_LIMPIO'] = df_rpts.iloc[:, 7].apply(lambda x: limpiar_nombre_y_curso(x)[0])
+        df_rpts['ETIQUETA'] = df_rpts['ID_GENERADA'].astype(str) + " - " + df_rpts['NOMBRE_LIMPIO']
         
-        st.success(f"✅ Archivo cargado. {len(df)} registros encontrados.")
-
-        df_validos = df[df['ID_GENERADA'] != "ERR"]
-        opciones = ["Selecciona un acta..."] + sorted(df_validos['ETIQUETA'].tolist())
-        seleccion = st.selectbox("Selecciona la reunión para generar el PDF:", opciones)
+        opciones = ["Selecciona un acta..."] + sorted(df_rpts[df_rpts['ID_GENERADA'] != "ERR"]['ETIQUETA'].tolist())
+        seleccion = st.selectbox("Selecciona la reunión:", opciones)
 
         if seleccion != "Selecciona un acta...":
             id_buscada = seleccion.split(" - ")[0]
-            fila_sel = df[df['ID_GENERADA'] == id_buscada].iloc[0]
+            fila_sel = df_rpts[df_rpts['ID_GENERADA'] == id_buscada].iloc[0]
             
-            try:
-                df_p = pd.read_excel(archivo, sheet_name='PARTE', header=None)
-                jefe = df_p.iloc[48, 3] if not pd.isna(df_p.iloc[48, 3]) else "Jefatura de Estudios"
-            except: jefe = "Jefatura de Estudios"
+            # 2. Leer Firmas de la pestaña 'Informe'
+            # Cargamos el bloque de firmas (filas 49 a 60 aprox)
+            # Nota: Python lee desde 0, así que fila 49 de Excel es índice 48
+            df_informe = pd.read_excel(archivo, sheet_name='Informe', header=None)
+            
+            firmas_validas = []
+            # Recorremos desde la fila 49 (índice 48) hasta la 65 por si acaso
+            for i in range(48, 65):
+                try:
+                    cargo = df_informe.iloc[i, 0] # Columna A
+                    nombre = df_informe.iloc[i, 2] # Columna C
+                    
+                    # Si el cargo existe y el nombre no está vacío ni es error
+                    if pd.notna(cargo) and pd.notna(nombre) and str(nombre).strip() not in ["", "nan", "0"]:
+                        # Limpiar el prefijo "Fdo." si ya lo trae el Excel para no duplicarlo
+                        nombre_limpio = str(nombre).replace("Fdo.", "").replace("Fdo:", "").strip()
+                        firmas_validas.append((str(cargo).strip(": "), nombre_limpio))
+                except:
+                    continue
 
-            if st.button("🚀 Descargar PDF"):
-                pdf_bytes = generar_pdf_reunion(fila_sel, jefe)
-                st.download_button(label="⬇️ Haz clic aquí para guardar el PDF", 
+            if st.button("🚀 Generar PDF Final"):
+                pdf_bytes = generar_pdf_reunion(fila_sel, firmas_validas)
+                st.download_button(label="⬇️ Descargar Acta", 
                                    data=bytes(pdf_bytes), 
                                    file_name=f"Acta_{id_buscada}.pdf", 
                                    mime="application/pdf")
 
     except Exception as e:
-        st.error(f"⚠️ Error al procesar el archivo: {e}")
-else:
-    st.info("👋 Por favor, sube el archivo Excel de Respuestas para empezar.")
+        st.error(f"⚠️ Error: {e}")
