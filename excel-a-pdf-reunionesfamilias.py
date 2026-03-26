@@ -6,13 +6,11 @@ import datetime
 class PDFReunion(FPDF):
     def header(self):
         try:
-            # 1. Logo
             self.image('encabezado.png', 10, 8, 190)
             self.ln(33) 
         except:
             self.ln(10)
         
-        # 2. TÍTULO DE REUNIÓN
         self.set_font('helvetica', 'B', 16)
         self.cell(0, 10, 'REUNIÓN PRESENCIAL CON FAMILIAS', 0, 1, 'C')
         self.ln(5)
@@ -30,7 +28,7 @@ class PDFReunion(FPDF):
         if pd.isna(valor) or str(valor).strip() in ["nan", "#VALUE!", ""]:
             val_str = "---"
         elif isinstance(valor, (datetime.datetime, pd.Timestamp)):
-            val_str = valor.strftime('%d/%m/%Y')
+            val_str = valor.strftime('%d/%m/%Y %H:%M')
         else:
             val_str = str(valor)
         self.multi_cell(0, 6, val_str.encode('latin-1', 'replace').decode('latin-1'))
@@ -77,38 +75,51 @@ def generar_pdf_reunion(datos_fila, nombre_jefatura):
     pdf.add_page()
     
     pdf.seccion("DATOS DE LA REUNIÓN")
-    # Campo 1 modificado: ID + Texto solicitado
+    
+    # Campo 1: ID + Texto solicitado
     id_val = datos_fila.get('ID_REDONDEADA', '---')
-    pdf.campo("ID", f"{id_val}. La reunión se produce a petición de...")
+    peticion = datos_fila.get('La reunión se produce a petición de...', '---')
+    pdf.campo("ID", f"{id_val}. La reunión se produce a petición de: {peticion}")
     
-    # Campo 2 modificado: Fecha y hora
-    pdf.campo("Fecha y hora de la comunicación", datos_fila.get('FECHA DEL INCIDENTE', '---'))
+    # Campo 2: Fecha y hora de la comunicación
+    # Ajustamos al nombre exacto de la columna en tu hoja "Informe"
+    fecha_com = datos_fila.get('Fecha y hora de la comunicación', '---')
+    pdf.campo("Fecha y hora de la comunicación", fecha_com)
     
-    # Datos de identificación
-    pdf.campo("ALUMN@/O", datos_fila.get('ALUMNO OBJETO DEL PARTE', '---'))
-    pdf.campo("CURSO / GRUPO / TUTOR", datos_fila.get('CURSO / GRUPO / TUTOR', '---'))
+    # Datos del Alumno (Ajustar nombres de columna si varían en la hoja Informe)
+    alumno = datos_fila.get('Nombre del alumno/a', '---')
+    curso = datos_fila.get('Curso', '---')
+    pdf.campo("ALUMN@/O", alumno)
+    pdf.campo("CURSO", curso)
     
-    docente_nombre = datos_fila.get('DOCENTE / ED. SOCIAL QUE IMPONE EL PARTE', '---')
+    # Docente
+    docente_nombre = datos_fila.get('Docente que convoca la reunión', '---')
     pdf.campo("DOCENTE RESPONSABLE", docente_nombre)
-    
-    # Espacio para firmas con casillas marcadas
+
+    # Espacio para firmas
     pdf.dibujar_firmas_paralelo(docente_nombre, nombre_jefatura)
     
     return pdf.output()
 
 # --- INTERFAZ STREAMLIT ---
-st.set_page_config(page_title="Informes de Reunión", page_icon="🤝")
-st.title("🤝 Reunión Presencial con Familias")
+st.set_page_config(page_title="Actas de Reunión", page_icon="🤝")
+st.title("🤝 Generador de Actas de Reunión")
 
 archivo = st.file_uploader("Sube el archivo Excel", type=['xlsx'])
 
 if archivo:
     try:
-        df = pd.read_excel(archivo, sheet_name='RPTS')
-        # Capturamos el nombre de jefatura desde la hoja PARTE
-        df_parte = pd.read_excel(archivo, sheet_name='PARTE', header=None)
-        nombre_jefatura = df_parte.iloc[48, 3] if not pd.isna(df_parte.iloc[48, 3]) else "Jefatura de Estudios"
+        # 1. CARGAMOS LA HOJA "Informe"
+        df = pd.read_excel(archivo, sheet_name='Informe')
+        
+        # 2. CARGAMOS JEFATURA DE LA HOJA "PARTE" (si sigue existiendo)
+        try:
+            df_parte = pd.read_excel(archivo, sheet_name='PARTE', header=None)
+            nombre_jefatura = df_parte.iloc[48, 3] if not pd.isna(df_parte.iloc[48, 3]) else "Jefatura de Estudios"
+        except:
+            nombre_jefatura = "Jefatura de Estudios"
 
+        # Lógica de ID basada en la columna 'NUMERO' de la hoja Informe
         def extraer_id_redondeada(valor):
             try:
                 valor_redondeado = round(float(valor), 4)
@@ -116,13 +127,14 @@ if archivo:
             except:
                 return None
 
-        # Procesamos IDs y creamos la etiqueta para el buscador
+        # Procesar datos
         df['ID_REDONDEADA'] = df['NUMERO'].apply(extraer_id_redondeada)
-        df['ETIQUETA'] = df['ID_REDONDEADA'].astype(str) + " - " + df['ALUMNO OBJETO DEL PARTE'].astype(str)
+        # Usamos 'Nombre del alumno/a' que es el estándar en estas hojas
+        df['ETIQUETA'] = df['ID_REDONDEADA'].astype(str) + " - " + df['Nombre del alumno/a'].astype(str)
         
-        st.success("✅ Archivo cargado correctamente.")
+        st.success("✅ Hoja 'Informe' cargada correctamente.")
 
-        # Desplegable de selección
+        # Desplegable
         opciones = ["Selecciona un alumno..."] + sorted(df['ETIQUETA'].dropna().tolist())
         seleccion = st.selectbox("Introduce la ID:", opciones)
 
@@ -130,18 +142,18 @@ if archivo:
             id_real = seleccion.split(" - ")[0]
             fila = df[df['ID_REDONDEADA'] == id_real].iloc[0]
             
-            st.info(f"📋 Registro seleccionado: {fila['ALUMNO OBJETO DEL PARTE']}")
+            st.info(f"📋 Acta seleccionada: {fila['Nombre del alumno/a']}")
             
-            if st.button("🚀 Generar Informe de Reunión"):
+            if st.button("🚀 Generar Acta de Reunión"):
                 pdf_bytes = generar_pdf_reunion(fila, nombre_jefatura)
                 st.download_button(
-                    label="⬇️ Descargar Informe PDF",
+                    label="⬇️ Descargar Acta PDF",
                     data=bytes(pdf_bytes),
-                    file_name=f"Reunion_{id_real}.pdf",
+                    file_name=f"Acta_Reunion_{id_real}.pdf",
                     mime="application/pdf"
                 )
 
     except Exception as e:
-        st.error(f"⚠️ Error al procesar el archivo: {e}")
+        st.error(f"⚠️ Error: Asegúrate de que el Excel tiene una pestaña llamada 'Informe'. Detalle: {e}")
 else:
     st.info("👋 Por favor, sube el archivo Excel para empezar.")
