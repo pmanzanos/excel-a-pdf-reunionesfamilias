@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from fpdf import FPDF
 import re
+import datetime
 
 class PDFReunion(FPDF):
     def header(self):
@@ -28,22 +29,35 @@ class PDFReunion(FPDF):
         self.multi_cell(0, 6, val_str.encode('latin-1', 'replace').decode('latin-1'))
         self.ln(1)
 
-    def dibujar_bloque_firmas(self, lista_firmas, fecha_reunion):
+    def dibujar_bloque_firmas(self, lista_firmas, fecha_texto):
         self.ln(10)
-        # Fecha de cierre
-        fecha_hoy = datetime.datetime.now().strftime("%d/%m/%Y")
+        # Lugar y fecha formateada
         self.set_font('helvetica', 'I', 10)
-        self.cell(0, 10, f"En Hoyos, a {fecha_reunion}", 0, 1, 'L')
+        self.cell(0, 10, f"En Hoyos, a {fecha_texto}", 0, 1, 'L')
         self.ln(5)
         
-        # Dibujar solo cargos con nombre
-        self.set_font('helvetica', '', 10)
+        # Cargos dinámicos
         for cargo, nombre in lista_firmas:
             self.set_font('helvetica', 'B', 10)
             self.write(7, f"{cargo}: ")
             self.set_font('helvetica', '', 10)
             self.multi_cell(0, 7, f"Fdo. {nombre}".encode('latin-1', 'replace').decode('latin-1'))
             self.ln(2)
+
+def formatear_fecha_espanol(fecha_obj):
+    try:
+        if isinstance(fecha_obj, str):
+            fecha_obj = pd.to_datetime(fecha_obj)
+        meses = [
+            "enero", "febrero", "marzo", "abril", "mayo", "junio",
+            "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"
+        ]
+        dia = fecha_obj.day
+        mes = meses[fecha_obj.month - 1]
+        anio = fecha_obj.year
+        return f"{dia} de {mes} de {anio}"
+    except:
+        return "--- de --- de ---"
 
 def limpiar_nombre_y_curso(texto):
     if pd.isna(texto): return "---", "---"
@@ -61,12 +75,13 @@ def generar_pdf_reunion(fila_rpts, lista_firmas):
     pdf.set_auto_page_break(auto=True, margin=15)
     pdf.add_page()
     
+    # Formatear la fecha de la reunión (columna E -> índice 4)
+    fecha_formateada = formatear_fecha_espanol(fila_rpts.iloc[4])
+    
     pdf.seccion("DATOS DE LA REUNIÓN")
     pdf.campo("ID", fila_rpts['ID_GENERADA']) 
     pdf.campo("LA REUNIÓN SE PRODUCE A PETICIÓN DE", fila_rpts.iloc[3])
-    
-    fecha_com = str(fila_rpts.iloc[4]).split(" ")[0] # Solo fecha
-    pdf.campo("FECHA Y HORA DE LA COMUNICACIÓN", f"{fecha_com} a las {fila_rpts.iloc[5]}")
+    pdf.campo("FECHA Y HORA DE LA COMUNICACIÓN", f"{fecha_formateada} a las {fila_rpts.iloc[5]}")
     
     solo_nombre, solo_curso = limpiar_nombre_y_curso(fila_rpts.iloc[7])
     pdf.campo("ALUMN@/O", solo_nombre) 
@@ -79,22 +94,21 @@ def generar_pdf_reunion(fila_rpts, lista_firmas):
     pdf.campo("DESCRIPCIÓN DE LO TRATADO", fila_rpts.iloc[12])
     pdf.campo("TRÁMITE A SEGUIR", fila_rpts.iloc[11])
 
-    # Firmas dinámicas
-    pdf.dibujar_bloque_firmas(lista_firmas, fecha_com)
+    # Bloque de firmas con la fecha formateada
+    pdf.dibujar_bloque_firmas(lista_firmas, fecha_formateada)
     return pdf.output()
 
-# --- INTERFAZ STREAMLIT ---
-import datetime
+# --- INTERFAZ ---
 st.set_page_config(page_title="Generador Actas", page_icon="🤝")
-st.title("🤝 Actas de Reunión con Firmas Dinámicas")
+st.title("🤝 Generador de Actas")
 
-archivo = st.file_uploader("Sube el Excel", type=['xlsx'])
+archivo = st.file_uploader("Sube el Excel con pestañas RPTS e Informe", type=['xlsx'])
 
 if archivo:
     try:
-        # 1. Leer RPTS para el listado
         df_rpts = pd.read_excel(archivo, sheet_name='RPTS')
         
+        # Lógica de ID desde Marca Temporal (Columna C)
         def generar_id(fecha_val):
             try:
                 if isinstance(fecha_val, str): fecha_val = pd.to_datetime(fecha_val)
@@ -107,38 +121,26 @@ if archivo:
         df_rpts['ETIQUETA'] = df_rpts['ID_GENERADA'].astype(str) + " - " + df_rpts['NOMBRE_LIMPIO']
         
         opciones = ["Selecciona un acta..."] + sorted(df_rpts[df_rpts['ID_GENERADA'] != "ERR"]['ETIQUETA'].tolist())
-        seleccion = st.selectbox("Selecciona la reunión:", opciones)
+        seleccion = st.selectbox("Busca al alumno:", opciones)
 
         if seleccion != "Selecciona un acta...":
             id_buscada = seleccion.split(" - ")[0]
             fila_sel = df_rpts[df_rpts['ID_GENERADA'] == id_buscada].iloc[0]
             
-            # 2. Leer Firmas de la pestaña 'Informe'
-            # Cargamos el bloque de firmas (filas 49 a 60 aprox)
-            # Nota: Python lee desde 0, así que fila 49 de Excel es índice 48
-            df_informe = pd.read_excel(archivo, sheet_name='Informe', header=None)
-            
-            firmas_validas = []
-            # Recorremos desde la fila 49 (índice 48) hasta la 65 por si acaso
-            for i in range(48, 65):
+            # Leer firmas de pestaña 'Informe' (Fila 49 en Excel es 48 en Python)
+            df_inf = pd.read_excel(archivo, sheet_name='Informe', header=None)
+            firmas = []
+            for i in range(48, 65): # Rango de firmas
                 try:
-                    cargo = df_informe.iloc[i, 0] # Columna A
-                    nombre = df_informe.iloc[i, 2] # Columna C
-                    
-                    # Si el cargo existe y el nombre no está vacío ni es error
+                    cargo = df_inf.iloc[i, 0] # Columna A
+                    nombre = df_inf.iloc[i, 2] # Columna C
                     if pd.notna(cargo) and pd.notna(nombre) and str(nombre).strip() not in ["", "nan", "0"]:
-                        # Limpiar el prefijo "Fdo." si ya lo trae el Excel para no duplicarlo
-                        nombre_limpio = str(nombre).replace("Fdo.", "").replace("Fdo:", "").strip()
-                        firmas_validas.append((str(cargo).strip(": "), nombre_limpio))
-                except:
-                    continue
+                        firmas.append((str(cargo).strip(": "), str(nombre).strip()))
+                except: continue
 
-            if st.button("🚀 Generar PDF Final"):
-                pdf_bytes = generar_pdf_reunion(fila_sel, firmas_validas)
-                st.download_button(label="⬇️ Descargar Acta", 
-                                   data=bytes(pdf_bytes), 
-                                   file_name=f"Acta_{id_buscada}.pdf", 
-                                   mime="application/pdf")
+            if st.button("🚀 Crear PDF"):
+                pdf_bytes = generar_pdf_reunion(fila_sel, firmas)
+                st.download_button("⬇️ Descargar Acta", data=bytes(pdf_bytes), file_name=f"Acta_{id_buscada}.pdf")
 
     except Exception as e:
-        st.error(f"⚠️ Error: {e}")
+        st.error(f"⚠️ Revisa las pestañas: {e}")
