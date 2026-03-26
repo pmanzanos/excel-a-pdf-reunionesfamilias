@@ -38,7 +38,7 @@ class PDFReunion(FPDF):
         self.set_font('helvetica', '', 10)
         for cargo, nombre in lista_firmas:
             # Formato solicitado: Fdo. Nombre (Cargo)
-            # Limpiamos posibles "Fdo." duplicados
+            # Limpiamos posibles prefijos para que no se repitan
             limpio_nombre = str(nombre).replace("Fdo.", "").replace("Fdo:", "").strip()
             texto_firma = f"Fdo. {limpio_nombre} ({cargo})"
             
@@ -90,13 +90,14 @@ def generar_pdf_reunion(fila_rpts, lista_firmas):
 
 # --- STREAMLIT ---
 st.set_page_config(page_title="Generador Actas", page_icon="🤝")
-st.title("🤝 Generador de Actas (Filtro de Firmas)")
+st.title("🤝 Generador de Actas")
 
 archivo = st.file_uploader("Sube el Excel", type=['xlsx'])
 
 if archivo:
     try:
         df_rpts = pd.read_excel(archivo, sheet_name='RPTS')
+        # Cargamos la pestaña Informe sin cabeceras para manejar bien las filas
         df_inf = pd.read_excel(archivo, sheet_name='Informe', header=None)
 
         def gen_id(f):
@@ -116,24 +117,30 @@ if archivo:
             id_b = sel.split(" - ")[0]
             fila_sel = df_rpts[df_rpts['ID_GENERADA'] == id_b].iloc[0]
             
-            # --- ESCANEO DE FIRMAS AMPLIADO ---
+            # --- LÓGICA DE FIRMAS CORREGIDA ---
             firmas_encontradas = []
-            # Escaneamos un rango más amplio (hasta la fila 80 de Excel para no dejarnos a nadie)
-            for r en range(48, 80): 
+            # range(48, 100) asegura que llegamos hasta la fila 100 del Excel
+            for i in range(48, 100): 
                 try:
-                    # Columna A (Cargo) y Columna C (Nombre)
-                    cargo_raw = df_inf.iloc[r, 0]
-                    nombre_raw = df_inf.iloc[r, 2]
+                    # Si nos salimos del índice del Excel, paramos
+                    if i >= len(df_inf): break
                     
+                    cargo_raw = df_inf.iloc[i, 0] # Columna A
+                    nombre_raw = df_inf.iloc[i, 2] # Columna C
+                    
+                    # Verificamos si hay un nombre escrito
                     if pd.notna(nombre_raw) and str(nombre_raw).strip() not in ["", "0", "nan"]:
-                        cargo = str(cargo_raw).strip().rstrip(":") if pd.notna(cargo_raw) else "Representante"
+                        cargo = str(cargo_raw).strip().rstrip(":") if pd.notna(cargo_raw) else "Firma"
                         nombre = str(nombre_raw).strip()
                         firmas_encontradas.append((cargo, nombre))
-                except: continue
+                except:
+                    continue
 
             if st.button("🚀 Generar PDF"):
+                if not firmas_encontradas:
+                    st.warning("No se encontraron nombres en la pestaña Informe (filas 49-100, Columna C)")
                 pdf_bytes = generar_pdf_reunion(fila_sel, firmas_encontradas)
-                st.download_button("⬇️ Descargar", data=bytes(pdf_bytes), file_name=f"Acta_{id_b}.pdf")
+                st.download_button("⬇️ Descargar Acta", data=bytes(pdf_bytes), file_name=f"Acta_{id_b}.pdf")
 
     except Exception as e:
-        st.error(f"Error: {e}")
+        st.error(f"Error al procesar: {e}")
