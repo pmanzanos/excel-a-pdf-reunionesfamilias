@@ -66,12 +66,13 @@ def generar_pdf_reunion(fila, nombre_jefatura):
     pdf.seccion("DATOS DE LA REUNIÓN")
     id_val = fila['ID_GENERADA']
     
-    pdf.campo("ID", f"{id_val}. La reunión se produce a petición de: {fila.iloc[3]}") # D
+    pdf.campo("ID", f"{id_val}.
+    pdf.campo("La reunión se produce a petición de:" {fila.iloc[3]}") # D
     pdf.campo("Fecha y hora", f"{fila.iloc[4]} a las {fila.iloc[5]}") # E y F
     
     solo_nombre, solo_curso = limpiar_nombre_y_curso(fila.iloc[7]) # H
     
-    pdf.campo("ALUMN@/O", solo_nombre) 
+    pdf.campo("ALUMNA/O", solo_nombre) 
     pdf.campo("CURSO", solo_curso)
     pdf.campo("FAMILIAR/ES PRESENTES", fila.iloc[9]) # J
     pdf.campo("OTROS PRESENTES", fila.iloc[8]) # I
