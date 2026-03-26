@@ -50,7 +50,6 @@ class PDFReunion(FPDF):
 def limpiar_nombre_y_curso(texto):
     if pd.isna(texto): return "---", "---"
     t = str(texto)
-    # Buscamos números o Diver para separar nombre de curso
     match = re.search(r'(\d|Diver)', t, re.IGNORECASE)
     if match:
         indice = match.start()
@@ -65,7 +64,7 @@ def generar_pdf_reunion(fila, nombre_jefatura):
     pdf.add_page()
     
     pdf.seccion("DATOS DE LA REUNIÓN")
-    id_val = fila['ID_EXTRAIDA']
+    id_val = fila['ID_GENERADA']
     
     pdf.campo("ID", f"{id_val}. La reunión se produce a petición de: {fila.iloc[3]}") # D
     pdf.campo("Fecha y hora", f"{fila.iloc[4]} a las {fila.iloc[5]}") # E y F
@@ -87,7 +86,7 @@ def generar_pdf_reunion(fila, nombre_jefatura):
 
 # --- INTERFAZ STREAMLIT ---
 st.set_page_config(page_title="Generador Actas", page_icon="🤝")
-st.title("🤝 Actas de Reunión (Pestaña RPTS)")
+st.title("🤝 Actas de Reunión (ID desde Marca Temporal)")
 
 archivo = st.file_uploader("Sube el Excel de Respuestas", type=['xlsx'])
 
@@ -95,42 +94,41 @@ if archivo:
     try:
         df = pd.read_excel(archivo, sheet_name='RPTS')
         
-        # NUEVA LÓGICA DE ID: Extraer los 4 decimales finales del número en Columna B
-        def obtener_id_robusta(valor):
+        # SOLUCIÓN AL REDONDEO: Generar la ID directamente de la Marca Temporal (Columna C / Índice 2)
+        # Esto replica lo que hace Google Sheets internamente pero de forma controlada en Python
+        def generar_id_desde_fecha(fecha_val):
             try:
-                # Convertimos a string y eliminamos cualquier cosa que no sea número o punto
-                s = str(valor)
-                if "." in s:
-                    # Tomamos lo que hay después del punto (los decimales)
-                    decimales = s.split(".")[1]
-                    return decimales[:4] # Tomamos los primeros 4 dígitos decimales
-                elif "," in s:
-                    decimales = s.split(",")[1]
-                    return decimales[:4]
-                else:
-                    # Si el número viene entero, tomamos sus últimos 4 dígitos
-                    return s[-4:]
+                # Convertimos la fecha a número decimal (formato Excel)
+                # 25569 es el offset de días entre Unix y Excel
+                if isinstance(fecha_val, str):
+                    fecha_val = pd.to_datetime(fecha_val)
+                
+                excel_date = (fecha_val - pd.Timestamp("1899-12-30")).total_seconds() / 86400.0
+                # Redondeamos a 5 decimales (que es lo que suele mostrar Google Sheets)
+                num_redondeado = round(excel_date, 5)
+                # Extraemos los 4 dígitos decimales finales como hace tu fórmula
+                id_str = str(f"{num_redondeado:.5f}").split(".")[1][:4]
+                return id_str
             except:
                 return "ERR"
 
-        # Aplicamos a la columna B (índice 1)
-        df['ID_EXTRAIDA'] = df.iloc[:, 1].apply(obtener_id_robusta)
+        # Aplicamos a la Columna C (índice 2) que es la "Marca temporal" original
+        df['ID_GENERADA'] = df.iloc[:, 2].apply(generar_id_desde_fecha)
         
         # Limpieza de nombre en columna H (índice 7)
         df['NOMBRE_LIMPIO'] = df.iloc[:, 7].apply(lambda x: limpiar_nombre_y_curso(x)[0])
-        df['ETIQUETA'] = df['ID_EXTRAIDA'].astype(str) + " - " + df['NOMBRE_LIMPIO']
+        df['ETIQUETA'] = df['ID_GENERADA'].astype(str) + " - " + df['NOMBRE_LIMPIO']
         
-        st.success(f"✅ Cargados {len(df)} registros.")
+        st.success(f"✅ Cargados {len(df)} registros. IDs sincronizadas con éxito.")
 
-        # Filtrar filas vacías de ID o nombres con error
-        df_validos = df[df['ID_EXTRAIDA'] != "ERR"]
+        df_validos = df[df['ID_GENERADA'] != "ERR"]
         opciones = ["Selecciona un alumno..."] + sorted(df_validos['ETIQUETA'].tolist())
         
         seleccion = st.selectbox("Busca por ID o Nombre:", opciones)
 
         if seleccion != "Selecciona un alumno...":
             id_buscada = seleccion.split(" - ")[0]
-            fila_sel = df[df['ID_EXTRAIDA'] == id_buscada].iloc[0]
+            fila_sel = df[df['ID_GENERADA'] == id_buscada].iloc[0]
             
             try:
                 df_p = pd.read_excel(archivo, sheet_name='PARTE', header=None)
